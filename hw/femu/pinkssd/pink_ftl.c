@@ -166,58 +166,66 @@ void ssd_advance_write_pointer(struct ssd *ssd, struct line_partition *lm)
 {
     struct ssdparams *spp = &ssd->sp;
     struct write_pointer *wpp = &lm->wp;
-
+    struct kvssd_latency *lat = &ssd->lat;
+    uint8_t flash_types = lat->flash_type;
     check_addr(wpp->ch, spp->nchs);
-    wpp->ch++;
-    if (wpp->ch == spp->nchs) {
-        wpp->ch = 0;
-        check_addr(wpp->lun, spp->luns_per_ch);
-        wpp->lun++;
-        /* in this case, we should go to next lun */
-        if (wpp->lun == spp->luns_per_ch) {
-            wpp->lun = 0;
-            /* go to next page in the block */
-            check_addr(wpp->pg, spp->pgs_per_blk);
-            wpp->pg++;
-            if (wpp->pg == spp->pgs_per_blk) {
-                wpp->pg = 0;
-                /* move current line to {victim,full} line list */
-                if (wpp->curline->vpc == spp->pgs_per_line && wpp->curline->vsc == (spp->secs_per_line * 32)) {
-                    /* all pgs are still valid, move to full line list */
-                    kv_assert(wpp->curline->ipc == 0);
-                    kv_assert(wpp->curline->isc == 0);
-                    QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
-                    lm->full_line_cnt++;
-                } else {
-                    if (lm == &ssd->lm.data) {
-                        kv_assert(wpp->curline->vpc == spp->pgs_per_line);
-                        kv_assert(wpp->curline->vsc >= 0 && wpp->curline->vsc < (spp->secs_per_line * 32));
+
+    /* Change program sequence to fill all cells (e.g. MLC: 2, TLC:3) in a page before moving to the next location */
+    if (wpp->pg % flash_types == (flash_types-1)) {
+        wpp->pg -= (flash_types-1);
+        wpp->ch++;
+        if (wpp->ch == spp->nchs) {
+            wpp->ch = 0;
+            check_addr(wpp->lun, spp->luns_per_ch);
+            wpp->lun++;
+            /* in this case, we should go to next lun */
+            if (wpp->lun == spp->luns_per_ch) {
+                wpp->lun = 0;
+                /* go to next page in the block */
+                check_addr(wpp->pg, spp->pgs_per_blk);
+                wpp->pg+=flash_types;
+                if (wpp->pg == spp->pgs_per_blk) {
+                    wpp->pg = 0;
+                    /* move current line to {victim,full} line list */
+                    if (wpp->curline->vpc == spp->pgs_per_line && wpp->curline->vsc == (spp->secs_per_line * 32)) {
+                        /* all pgs are still valid, move to full line list */
+                        kv_assert(wpp->curline->ipc == 0);
+                        kv_assert(wpp->curline->isc == 0);
+                        QTAILQ_INSERT_TAIL(&lm->full_line_list, wpp->curline, entry);
+                        lm->full_line_cnt++;
                     } else {
-                        kv_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
+                        if (lm == &ssd->lm.data) {
+                            kv_assert(wpp->curline->vpc == spp->pgs_per_line);
+                            kv_assert(wpp->curline->vsc >= 0 && wpp->curline->vsc < (spp->secs_per_line * 32));
+                        } else {
+                            kv_assert(wpp->curline->vpc >= 0 && wpp->curline->vpc < spp->pgs_per_line);
+                        }
+                        /* there must be some invalid pages in this line */
+                        kv_assert(wpp->curline->ipc > 0 || wpp->curline->isc > 0);
+                        pqueue_insert(lm->victim_line_pq, wpp->curline);
+                        lm->victim_line_cnt++;
                     }
-                    /* there must be some invalid pages in this line */
-                    kv_assert(wpp->curline->ipc > 0 || wpp->curline->isc > 0);
-                    pqueue_insert(lm->victim_line_pq, wpp->curline);
-                    lm->victim_line_cnt++;
+                    /* current line is used up, pick another empty line */
+                    check_addr(wpp->blk, spp->blks_per_pl);
+                    wpp->curline = NULL;
+                    wpp->curline = get_next_free_line(lm);
+                    if (!wpp->curline) {
+                        /* TODO */
+                        abort();
+                    }
+                    wpp->blk = wpp->curline->id;
+                    check_addr(wpp->blk, spp->blks_per_pl);
+                    /* make sure we are starting from page 0 in the super block */
+                    kv_assert(wpp->pg == 0);
+                    kv_assert(wpp->lun == 0);
+                    kv_assert(wpp->ch == 0);
+                    /* TODO: assume # of pl_per_lun is 1, fix later */
+                    kv_assert(wpp->pl == 0);
                 }
-                /* current line is used up, pick another empty line */
-                check_addr(wpp->blk, spp->blks_per_pl);
-                wpp->curline = NULL;
-                wpp->curline = get_next_free_line(lm);
-                if (!wpp->curline) {
-                    /* TODO */
-                    abort();
-                }
-                wpp->blk = wpp->curline->id;
-                check_addr(wpp->blk, spp->blks_per_pl);
-                /* make sure we are starting from page 0 in the super block */
-                kv_assert(wpp->pg == 0);
-                kv_assert(wpp->lun == 0);
-                kv_assert(wpp->ch == 0);
-                /* TODO: assume # of pl_per_lun is 1, fix later */
-                kv_assert(wpp->pl == 0);
             }
         }
+    } else {
+        wpp->pg += 1;
     }
 }
 
