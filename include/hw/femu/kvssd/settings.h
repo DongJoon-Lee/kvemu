@@ -372,7 +372,8 @@ static inline void stat_range_lun(struct range_lun *l)
     }
 }
 
-#define MAXVALUESIZE 4096
+/* Expand max value size 4096 to 4096*2 for test */
+#define MAXVALUESIZE 4096*2
 
 #define PREFIX_LENGTH 4
 #define RANGE_POINTER_LENGTH 4
