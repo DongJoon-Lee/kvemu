@@ -55,6 +55,10 @@ void compaction_data_write(struct ssd *ssd, leveling_node* lnode) {
     pink_l_bucket *lb = pink_skiplist_make_length_bucket(lnode->mem);
     int max_vsize = MAXVALUESIZE;
     int min_vsize = 0;
+    struct kvssd_latency *lat = &ssd->lat;
+    uint8_t flash_types = lat->flash_type;
+    int inserted_values[flash_types+1][MAXVALUESIZE];
+    memset(inserted_values, 0, (flash_types+1) * MAXVALUESIZE * sizeof(int));
 
     int n_vals = 0;
     for (int vsize = 0; vsize <= MAXVALUESIZE; vsize++) {
@@ -76,6 +80,7 @@ void compaction_data_write(struct ssd *ssd, leveling_node* lnode) {
     int in_page_idx;
     int written_data;
     kv_snode *targets[256];
+    kv_debug("Compaction Data Write ----------\r\n");
     while (n_vals > 0) {
         /* Get the new page from the write pointer of data segment partition manager */
         ppa = get_new_data_page(ssd);
@@ -111,9 +116,19 @@ void compaction_data_write(struct ssd *ssd, leveling_node* lnode) {
                 in_page_idx++;
                 n_vals--;
                 n_value++;
+                inserted_values[ppa.g.pg%flash_types][vsize]+=1;
             }
         }
         log_cvt2table(&pg->data, targets, n_value);
+    }
+    /* Print size and number of values per cell type after flush */
+    for(int i = 0; i < flash_types; i ++) {
+        kv_debug("Page Types: %d\r\n", i);
+        for (int j = 0; j < MAXVALUESIZE; j ++) {
+            if(inserted_values[i][j] != 0) {
+                kv_debug("Value size: %4d, # of values: %4d\r\n", j, inserted_values[i][j]);
+            }
+        }
     }
 
     for(int vsize = 0; vsize <= MAXVALUESIZE; vsize++) {
